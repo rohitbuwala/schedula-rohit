@@ -22,7 +22,7 @@ import { UsersModule } from './users/users.module';
         type: 'postgres',
         url: configService.getOrThrow<string>('DATABASE_URL'),
         autoLoadEntities: true,
-        synchronize: true,
+        synchronize: false,
       }),
     }),
     UsersModule,
