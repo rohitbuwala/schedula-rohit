@@ -1,98 +1,159 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# Doctor Appointments API
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+NestJS 11 API for Day 2 authentication and role-based access control.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+## Stack
 
-## Description
+- NestJS 11
+- TypeScript
+- PostgreSQL
+- TypeORM
+- JWT authentication
+- npm
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+## Packages Added
 
-## Project setup
+- `@nestjs/config`: loads `.env` values through Nest's standard config module.
+- `@nestjs/typeorm`, `typeorm`, `pg`: connects NestJS to PostgreSQL using TypeORM.
+- `class-validator`, `class-transformer`: validates DTO request bodies through Nest's `ValidationPipe`.
+- `bcrypt`: hashes signup passwords and verifies login passwords.
+- `@nestjs/jwt`: signs JWT access tokens.
+- `@nestjs/passport`, `passport`, `passport-jwt`: integrates JWT bearer authentication with Nest guards.
+- `@types/bcrypt`, `@types/passport-jwt`: TypeScript types for development.
 
-```bash
-$ npm install
+## Environment Variables
+
+Create a `.env` file in the project root:
+
+```env
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/doctor_appointments
+JWT_SECRET=replace-with-a-long-random-secret
+JWT_EXPIRES_IN=1d
 ```
 
-## Compile and run the project
+Do not commit real secrets. `.env` is already ignored by git.
 
-```bash
-# development
-$ npm run start
+## Database Setup
 
-# watch mode
-$ npm run start:dev
+Create the PostgreSQL database before starting the app:
 
-# production mode
-$ npm run start:prod
+```sql
+CREATE DATABASE doctor_appointments;
 ```
 
-## Run tests
+The app uses TypeORM with `synchronize: true` for this development task, so the `users` table is created automatically when the app starts. For production, replace synchronization with migrations.
+
+## Install
 
 ```bash
-# unit tests
-$ npm run test
-
-# e2e tests
-$ npm run test:e2e
-
-# test coverage
-$ npm run test:cov
+npm install
 ```
 
-## Deployment
-
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
-
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+## Run
 
 ```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
+npm run start:dev
 ```
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+The API runs on `http://localhost:3000` by default.
 
-## Resources
+## Test
 
-Check out a few resources that may come in handy when working with NestJS:
+```bash
+npm test
+```
 
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
+## API Requests
 
-## Support
+### Signup Doctor
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
+`POST http://localhost:3000/auth/signup`
 
-## Stay in touch
+```json
+{
+  "name": "Dr. Asha Mehta",
+  "email": "doctor@example.com",
+  "password": "password123",
+  "role": "DOCTOR"
+}
+```
 
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
+### Signup Patient
 
-## License
+`POST http://localhost:3000/auth/signup`
 
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+```json
+{
+  "name": "Ravi Kumar",
+  "email": "patient@example.com",
+  "password": "password123",
+  "role": "PATIENT"
+}
+```
+
+### Login
+
+`POST http://localhost:3000/auth/login`
+
+```json
+{
+  "email": "doctor@example.com",
+  "password": "password123"
+}
+```
+
+Response:
+
+```json
+{
+  "access_token": "jwt-token",
+  "user": {
+    "id": "uuid",
+    "name": "Dr. Asha Mehta",
+    "email": "doctor@example.com",
+    "role": "DOCTOR",
+    "createdAt": "2026-07-21T00:00:00.000Z"
+  }
+}
+```
+
+### Doctor Profile
+
+`GET http://localhost:3000/doctor/profile`
+
+Header:
+
+```http
+Authorization: Bearer <doctor_access_token>
+```
+
+Only users with role `DOCTOR` can access this route. A patient token returns `403 Forbidden`.
+
+### Patient Profile
+
+`GET http://localhost:3000/patient/profile`
+
+Header:
+
+```http
+Authorization: Bearer <patient_access_token>
+```
+
+Only users with role `PATIENT` can access this route. A doctor token returns `403 Forbidden`.
+
+## Manual Testing Steps
+
+1. Start PostgreSQL.
+2. Create the `doctor_appointments` database.
+3. Create `.env` with `DATABASE_URL`, `JWT_SECRET`, and `JWT_EXPIRES_IN`.
+4. Run `npm run start:dev`.
+5. Send the doctor signup request.
+6. Send the patient signup request.
+7. Send the same signup request again to confirm duplicate email returns `409 Conflict`.
+8. Login as doctor and copy `access_token`.
+9. Login as patient and copy `access_token`.
+10. Call `GET /doctor/profile` with the doctor token and confirm `200 OK`.
+11. Call `GET /doctor/profile` with the patient token and confirm `403 Forbidden`.
+12. Call `GET /patient/profile` with the patient token and confirm `200 OK`.
+13. Call `GET /patient/profile` with the doctor token and confirm `403 Forbidden`.
+14. Call either profile route without a token and confirm `401 Unauthorized`.
