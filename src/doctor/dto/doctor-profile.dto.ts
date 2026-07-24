@@ -1,4 +1,12 @@
-import { IsInt, IsNotEmpty, IsOptional, IsString, Min } from 'class-validator';
+import {
+  IsEnum,
+  IsInt,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  Min,
+} from 'class-validator';
+import { SchedulingType } from '../scheduling-type.enum';
 
 export class CreateDoctorProfileDto {
   @IsString()
@@ -16,6 +24,15 @@ export class CreateDoctorProfileDto {
   @IsInt()
   @Min(0)
   consultationFee: number;
+
+  @IsOptional()
+  @IsEnum(SchedulingType)
+  schedulingType?: SchedulingType;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  maxPatientCapacity?: number;
 
   @IsOptional()
   @IsString()
@@ -46,6 +63,15 @@ export class UpdateDoctorProfileDto {
   @IsInt()
   @Min(0)
   consultationFee?: number;
+
+  @IsOptional()
+  @IsEnum(SchedulingType)
+  schedulingType?: SchedulingType;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  maxPatientCapacity?: number;
 
   @IsOptional()
   @IsString()

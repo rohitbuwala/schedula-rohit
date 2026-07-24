@@ -18,8 +18,14 @@ import {
   CreateRecurringAvailabilityDto,
   UpdateRecurringAvailabilityDto,
 } from './dto/recurring-availability.dto';
+import { GetWaveAvailabilityQueryDto } from './dto/wave-availability-query.dto';
 import { CustomAvailability } from './entity/custom-availability.entity';
 import { RecurringAvailability } from './entity/recurring-availability.entity';
+import { SchedulingType } from './scheduling-type.enum';
+
+type AvailabilityWindow =
+  | Pick<RecurringAvailability, 'id' | 'startTime' | 'endTime'>
+  | Pick<CustomAvailability, 'id' | 'startTime' | 'endTime'>;
 
 @Injectable()
 export class DoctorService {
@@ -38,6 +44,8 @@ export class DoctorService {
     if (existingProfile) {
       throw new ConflictException('Doctor profile already exists');
     }
+
+    this.validateMaxPatientCapacity(dto.maxPatientCapacity ?? 1);
 
     const profile = this.doctorProfileRepository.create({
       ...dto,
@@ -59,6 +67,10 @@ export class DoctorService {
 
   async updateProfile(userId: string, dto: UpdateDoctorProfileDto) {
     const profile = await this.getProfile(userId);
+    this.validateMaxPatientCapacity(
+      dto.maxPatientCapacity ?? profile.maxPatientCapacity,
+    );
+
     Object.assign(profile, dto);
 
     return this.doctorProfileRepository.save(profile);
@@ -116,36 +128,80 @@ export class DoctorService {
     );
   }
 
-  async getAvailabilityForDate(userId: string, dateQuery: string) {
+  async getAvailabilityForDate(
+    userId: string,
+    query: GetWaveAvailabilityQueryDto,
+  ) {
     const doctor = await this.getProfile(userId);
-    const date = this.validateDate(dateQuery);
+    const date = this.validateDate(query.date);
     const customAvailability = await this.customAvailabilityRepository.find({
       where: { doctor: { id: doctor.id }, date },
       order: { startTime: 'ASC' },
     });
 
+    if (doctor.schedulingType !== SchedulingType.WAVE) {
+      if (customAvailability.length > 0) {
+        return {
+          date,
+          source: 'CUSTOM',
+          slots: customAvailability,
+        };
+      }
+
+      const recurringAvailability =
+        await this.recurringAvailabilityRepository.find({
+          where: {
+            doctor: { id: doctor.id },
+            dayOfWeek: this.getDayOfWeek(date),
+          },
+          order: { startTime: 'ASC' },
+        });
+
+      return {
+        date,
+        source: 'RECURRING',
+        slots: recurringAvailability,
+      };
+    }
+
+    this.validateMaxPatientCapacity(doctor.maxPatientCapacity);
+    this.validateDateIsNotPast(date);
+
+    const bookedPatientsByAvailabilityId = this.parseBookedPatients(
+      query.bookedPatients,
+    );
+
     if (customAvailability.length > 0) {
       return {
         date,
         source: 'CUSTOM',
-        slots: customAvailability,
+        schedulingType: doctor.schedulingType,
+        availabilityWindow: this.buildWaveAvailabilityWindows(
+          customAvailability,
+          doctor.maxPatientCapacity,
+          bookedPatientsByAvailabilityId,
+        ),
       };
     }
 
-    const recurringAvailability = await this.recurringAvailabilityRepository.find(
-      {
+    const recurringAvailability =
+      await this.recurringAvailabilityRepository.find({
         where: {
           doctor: { id: doctor.id },
           dayOfWeek: this.getDayOfWeek(date),
         },
         order: { startTime: 'ASC' },
-      },
-    );
+      });
 
     return {
       date,
       source: 'RECURRING',
-      slots: recurringAvailability,
+      schedulingType: doctor.schedulingType,
+      availabilityWindow: this.buildWaveAvailabilityWindows(
+        recurringAvailability,
+        doctor.maxPatientCapacity,
+        bookedPatientsByAvailabilityId,
+      ),
     };
   }
 
@@ -211,13 +267,12 @@ export class DoctorService {
 
   private async validateAvailabilitySlot(
     doctorId: string,
-    slot: Pick<
-      RecurringAvailability,
-      'dayOfWeek' | 'startTime' | 'endTime'
-    >,
+    slot: Pick<RecurringAvailability, 'dayOfWeek' | 'startTime' | 'endTime'>,
     ignoredAvailabilityId?: string,
   ) {
-    if (this.timeToMinutes(slot.startTime) >= this.timeToMinutes(slot.endTime)) {
+    if (
+      this.timeToMinutes(slot.startTime) >= this.timeToMinutes(slot.endTime)
+    ) {
       throw new BadRequestException('startTime must be before endTime');
     }
 
@@ -259,7 +314,9 @@ export class DoctorService {
     doctorId: string,
     slot: Pick<CustomAvailability, 'date' | 'startTime' | 'endTime'>,
   ) {
-    if (this.timeToMinutes(slot.startTime) >= this.timeToMinutes(slot.endTime)) {
+    if (
+      this.timeToMinutes(slot.startTime) >= this.timeToMinutes(slot.endTime)
+    ) {
       throw new BadRequestException('startTime must be before endTime');
     }
 
@@ -295,6 +352,74 @@ export class DoctorService {
     }
   }
 
+  private validateMaxPatientCapacity(maxPatientCapacity: number) {
+    if (!Number.isInteger(maxPatientCapacity) || maxPatientCapacity <= 0) {
+      throw new BadRequestException(
+        'maxPatientCapacity must be an integer greater than 0',
+      );
+    }
+  }
+
+  private validateDateIsNotPast(date: string) {
+    if (date < this.today()) {
+      throw new BadRequestException('date cannot be in the past');
+    }
+  }
+
+  private parseBookedPatients(bookedPatients?: string) {
+    if (!bookedPatients) {
+      return new Map<string, number>();
+    }
+
+    return bookedPatients.split(',').reduce((capacityMap, entry) => {
+      const [availabilityId, countText] = entry
+        .split(':')
+        .map((value) => value.trim());
+
+      if (!availabilityId || !countText) {
+        throw new BadRequestException(
+          'bookedPatients must be in availabilityId:count format',
+        );
+      }
+
+      const bookedCount = Number(countText);
+
+      if (!Number.isInteger(bookedCount) || bookedCount < 0) {
+        throw new BadRequestException(
+          'booked patient counts must be non-negative integers',
+        );
+      }
+
+      capacityMap.set(availabilityId, bookedCount);
+
+      return capacityMap;
+    }, new Map<string, number>());
+  }
+
+  private buildWaveAvailabilityWindows(
+    availabilityWindows: AvailabilityWindow[],
+    maxPatientCapacity: number,
+    bookedPatientsByAvailabilityId: Map<string, number>,
+  ) {
+    return availabilityWindows.map((availabilityWindow) => {
+      const bookedPatients =
+        bookedPatientsByAvailabilityId.get(availabilityWindow.id) ?? 0;
+
+      if (bookedPatients > maxPatientCapacity) {
+        throw new ConflictException(
+          `Maximum patient capacity exceeded for availability window ${availabilityWindow.id}`,
+        );
+      }
+
+      return {
+        startTime: availabilityWindow.startTime,
+        endTime: availabilityWindow.endTime,
+        maxPatientCapacity,
+        availableCapacity: maxPatientCapacity - bookedPatients,
+      };
+    });
+  }
+
   private validateDate(date: string) {
     if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       throw new BadRequestException('date must be in YYYY-MM-DD format');
@@ -328,5 +453,14 @@ export class DoctorService {
     const [hours, minutes] = time.split(':').map(Number);
 
     return hours * 60 + minutes;
+  }
+
+  private today() {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = (now.getMonth() + 1).toString().padStart(2, '0');
+    const day = now.getDate().toString().padStart(2, '0');
+
+    return `${year}-${month}-${day}`;
   }
 }
