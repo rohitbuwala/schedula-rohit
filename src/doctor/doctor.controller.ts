@@ -1,9 +1,14 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
+  HttpCode,
+  Param,
   Patch,
+  ParseUUIDPipe,
   Post,
+  Query,
   Req,
   UseGuards,
 } from '@nestjs/common';
@@ -18,6 +23,11 @@ import {
   CreateDoctorProfileDto,
   UpdateDoctorProfileDto,
 } from './dto/doctor-profile.dto';
+import { CreateCustomAvailabilityDto } from './dto/custom-availability.dto';
+import {
+  CreateRecurringAvailabilityDto,
+  UpdateRecurringAvailabilityDto,
+} from './dto/recurring-availability.dto';
 
 type AuthenticatedRequest = Request & {
   user: AuthenticatedUser;
@@ -56,5 +66,68 @@ export class DoctorController {
       request.user.id,
       updateDoctorProfileDto,
     );
+  }
+
+  @Post('availability')
+  @Roles(UserRole.DOCTOR)
+  createAvailability(
+    @Req() request: AuthenticatedRequest,
+    @Body() createRecurringAvailabilityDto: CreateRecurringAvailabilityDto,
+  ) {
+    return this.doctorService.createAvailability(
+      request.user.id,
+      createRecurringAvailabilityDto,
+    );
+  }
+
+  @Get('availability')
+  @Roles(UserRole.DOCTOR)
+  getAvailability(@Req() request: AuthenticatedRequest) {
+    return this.doctorService.getAvailability(request.user.id);
+  }
+
+  @Post('availability/override')
+  @Roles(UserRole.DOCTOR)
+  createAvailabilityOverride(
+    @Req() request: AuthenticatedRequest,
+    @Body() createCustomAvailabilityDto: CreateCustomAvailabilityDto,
+  ) {
+    return this.doctorService.createAvailabilityOverride(
+      request.user.id,
+      createCustomAvailabilityDto,
+    );
+  }
+
+  @Get('availability/date')
+  @Roles(UserRole.DOCTOR)
+  getAvailabilityForDate(
+    @Req() request: AuthenticatedRequest,
+    @Query('date') date: string,
+  ) {
+    return this.doctorService.getAvailabilityForDate(request.user.id, date);
+  }
+
+  @Patch('availability/:id')
+  @Roles(UserRole.DOCTOR)
+  updateAvailability(
+    @Req() request: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() updateRecurringAvailabilityDto: UpdateRecurringAvailabilityDto,
+  ) {
+    return this.doctorService.updateAvailability(
+      request.user.id,
+      id,
+      updateRecurringAvailabilityDto,
+    );
+  }
+
+  @Delete('availability/:id')
+  @HttpCode(204)
+  @Roles(UserRole.DOCTOR)
+  deleteAvailability(
+    @Req() request: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.doctorService.deleteAvailability(request.user.id, id);
   }
 }
