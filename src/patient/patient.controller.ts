@@ -17,6 +17,7 @@ import {
   CreatePatientProfileDto,
   UpdatePatientProfileDto,
 } from './dto/patient-profile.dto';
+import { CreateWaveBookingDto } from './dto/create-wave-booking.dto';
 import { PatientService } from './patient.service';
 
 type AuthenticatedRequest = Request & {
@@ -55,6 +56,18 @@ export class PatientController {
     return this.patientService.updateProfile(
       request.user.id,
       updatePatientProfileDto,
+    );
+  }
+
+  @Post('wave-bookings')
+  @Roles(UserRole.PATIENT)
+  createWaveBooking(
+    @Req() request: AuthenticatedRequest,
+    @Body() createWaveBookingDto: CreateWaveBookingDto,
+  ) {
+    return this.patientService.createWaveBooking(
+      request.user.id,
+      createWaveBookingDto,
     );
   }
 }
