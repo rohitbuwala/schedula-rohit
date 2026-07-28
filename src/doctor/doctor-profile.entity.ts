@@ -8,6 +8,7 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 import { User } from '../users/user.entity';
+import { SchedulingType } from './scheduling-type.enum';
 
 @Entity({ name: 'doctor_profiles' })
 export class DoctorProfile {
@@ -25,6 +26,19 @@ export class DoctorProfile {
 
   @Column()
   consultationFee: number;
+
+  @Column({
+    type: 'enum',
+    enum: SchedulingType,
+    default: SchedulingType.STREAM,
+  })
+  schedulingType: SchedulingType;
+
+  @Column({ default: 30 })
+  slotDurationMinutes: number;
+
+  @Column({ default: 0 })
+  bufferTimeMinutes: number;
 
   @Column({ type: 'text', nullable: true })
   bio?: string;
