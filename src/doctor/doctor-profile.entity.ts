@@ -37,6 +37,12 @@ export class DoctorProfile {
   @Column({ default: 1 })
   maxPatientCapacity: number;
 
+  @Column({ default: 30 })
+  slotDurationMinutes: number;
+
+  @Column({ default: 0 })
+  bufferTimeMinutes: number;
+
   @Column({ type: 'text', nullable: true })
   bio?: string;
 
