@@ -28,6 +28,7 @@ import {
   CreateRecurringAvailabilityDto,
   UpdateRecurringAvailabilityDto,
 } from './dto/recurring-availability.dto';
+import { GetWaveAvailabilityQueryDto } from './dto/wave-availability-query.dto';
 
 type AuthenticatedRequest = Request & {
   user: AuthenticatedUser;
@@ -102,9 +103,9 @@ export class DoctorController {
   @Roles(UserRole.DOCTOR)
   getAvailabilityForDate(
     @Req() request: AuthenticatedRequest,
-    @Query('date') date: string,
+    @Query() query: GetWaveAvailabilityQueryDto,
   ) {
-    return this.doctorService.getAvailabilityForDate(request.user.id, date);
+    return this.doctorService.getAvailabilityForDate(request.user.id, query);
   }
 
   @Patch('availability/:id')

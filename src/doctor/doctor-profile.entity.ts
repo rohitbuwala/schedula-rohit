@@ -34,6 +34,9 @@ export class DoctorProfile {
   })
   schedulingType: SchedulingType;
 
+  @Column({ default: 1 })
+  maxPatientCapacity: number;
+
   @Column({ default: 30 })
   slotDurationMinutes: number;
 

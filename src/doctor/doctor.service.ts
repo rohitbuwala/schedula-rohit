@@ -18,15 +18,14 @@ import {
   CreateRecurringAvailabilityDto,
   UpdateRecurringAvailabilityDto,
 } from './dto/recurring-availability.dto';
+import { GetWaveAvailabilityQueryDto } from './dto/wave-availability-query.dto';
 import { CustomAvailability } from './entity/custom-availability.entity';
 import { RecurringAvailability } from './entity/recurring-availability.entity';
 import { SchedulingType } from './scheduling-type.enum';
 
-type AvailabilityWindow = {
-  id: string;
-  startTime: string;
-  endTime: string;
-};
+type AvailabilityWindow =
+  | Pick<RecurringAvailability, 'id' | 'startTime' | 'endTime'>
+  | Pick<CustomAvailability, 'id' | 'startTime' | 'endTime'>;
 
 type AppointmentSlot = {
   startTime: string;
@@ -52,6 +51,7 @@ export class DoctorService {
       throw new ConflictException('Doctor profile already exists');
     }
 
+    this.validateMaxPatientCapacity(dto.maxPatientCapacity ?? 1);
     this.validateSchedulingSettings(
       dto.slotDurationMinutes ?? 30,
       dto.bufferTimeMinutes ?? 0,
@@ -77,6 +77,9 @@ export class DoctorService {
 
   async updateProfile(userId: string, dto: UpdateDoctorProfileDto) {
     const profile = await this.getProfile(userId);
+    this.validateMaxPatientCapacity(
+      dto.maxPatientCapacity ?? profile.maxPatientCapacity,
+    );
     this.validateSchedulingSettings(
       dto.slotDurationMinutes ?? profile.slotDurationMinutes,
       dto.bufferTimeMinutes ?? profile.bufferTimeMinutes,
@@ -140,17 +143,15 @@ export class DoctorService {
     );
   }
 
-  async getAvailabilityForDate(userId: string, dateQuery: string) {
+  async getAvailabilityForDate(
+    userId: string,
+    query: GetWaveAvailabilityQueryDto,
+  ) {
     const doctor = await this.getProfile(userId);
-    const date = this.validateDate(dateQuery);
+    const date = this.validateDate(query.date);
     this.validateDateIsNotPast(date);
 
-    if (doctor.schedulingType === SchedulingType.WAVE) {
-      throw new BadRequestException(
-        'Wave scheduling is not implemented in Phase 1',
-      );
-    }
-
+    this.validateMaxPatientCapacity(doctor.maxPatientCapacity);
     this.validateSchedulingSettings(
       doctor.slotDurationMinutes,
       doctor.bufferTimeMinutes,
@@ -160,6 +161,48 @@ export class DoctorService {
       where: { doctor: { id: doctor.id }, date },
       order: { startTime: 'ASC' },
     });
+
+    if (doctor.schedulingType === SchedulingType.WAVE) {
+      const bookedPatientsByAvailabilityId = this.parseBookedPatients(
+        query.bookedPatients,
+      );
+
+      if (customAvailability.length > 0) {
+        this.validateAvailabilityWindowsDoNotOverlap(customAvailability);
+
+        return {
+          date,
+          source: 'CUSTOM',
+          schedulingType: doctor.schedulingType,
+          availabilityWindow: this.buildWaveAvailabilityWindows(
+            customAvailability,
+            doctor.maxPatientCapacity,
+            bookedPatientsByAvailabilityId,
+          ),
+        };
+      }
+
+      const recurringAvailability =
+        await this.recurringAvailabilityRepository.find({
+          where: {
+            doctor: { id: doctor.id },
+            dayOfWeek: this.getDayOfWeek(date),
+          },
+          order: { startTime: 'ASC' },
+        });
+      this.validateAvailabilityWindowsDoNotOverlap(recurringAvailability);
+
+      return {
+        date,
+        source: 'RECURRING',
+        schedulingType: doctor.schedulingType,
+        availabilityWindow: this.buildWaveAvailabilityWindows(
+          recurringAvailability,
+          doctor.maxPatientCapacity,
+          bookedPatientsByAvailabilityId,
+        ),
+      };
+    }
 
     if (customAvailability.length > 0) {
       this.validateAvailabilityWindowsDoNotOverlap(customAvailability);
@@ -353,6 +396,14 @@ export class DoctorService {
     }
   }
 
+  private validateMaxPatientCapacity(maxPatientCapacity: number) {
+    if (!Number.isInteger(maxPatientCapacity) || maxPatientCapacity <= 0) {
+      throw new BadRequestException(
+        'maxPatientCapacity must be an integer greater than 0',
+      );
+    }
+  }
+
   private validateSchedulingSettings(
     slotDurationMinutes: number,
     bufferTimeMinutes: number,
@@ -420,6 +471,60 @@ export class DoctorService {
         'Availability override cannot be in the past',
       );
     }
+  }
+
+  private parseBookedPatients(bookedPatients?: string) {
+    if (!bookedPatients) {
+      return new Map<string, number>();
+    }
+
+    return bookedPatients.split(',').reduce((capacityMap, entry) => {
+      const [availabilityId, countText] = entry
+        .split(':')
+        .map((value) => value.trim());
+
+      if (!availabilityId || !countText) {
+        throw new BadRequestException(
+          'bookedPatients must be in availabilityId:count format',
+        );
+      }
+
+      const bookedCount = Number(countText);
+
+      if (!Number.isInteger(bookedCount) || bookedCount < 0) {
+        throw new BadRequestException(
+          'booked patient counts must be non-negative integers',
+        );
+      }
+
+      capacityMap.set(availabilityId, bookedCount);
+
+      return capacityMap;
+    }, new Map<string, number>());
+  }
+
+  private buildWaveAvailabilityWindows(
+    availabilityWindows: AvailabilityWindow[],
+    maxPatientCapacity: number,
+    bookedPatientsByAvailabilityId: Map<string, number>,
+  ) {
+    return availabilityWindows.map((availabilityWindow) => {
+      const bookedPatients =
+        bookedPatientsByAvailabilityId.get(availabilityWindow.id) ?? 0;
+
+      if (bookedPatients > maxPatientCapacity) {
+        throw new ConflictException(
+          `Maximum patient capacity exceeded for availability window ${availabilityWindow.id}`,
+        );
+      }
+
+      return {
+        startTime: availabilityWindow.startTime,
+        endTime: availabilityWindow.endTime,
+        maxPatientCapacity,
+        availableCapacity: maxPatientCapacity - bookedPatients,
+      };
+    });
   }
 
   private generateStreamAppointmentSlots(

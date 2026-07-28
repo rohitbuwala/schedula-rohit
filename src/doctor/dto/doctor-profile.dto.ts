@@ -33,6 +33,11 @@ export class CreateDoctorProfileDto {
   @IsOptional()
   @IsInt()
   @Min(1)
+  maxPatientCapacity?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
   @Max(480)
   slotDurationMinutes?: number;
 
@@ -75,6 +80,11 @@ export class UpdateDoctorProfileDto {
   @IsOptional()
   @IsEnum(SchedulingType)
   schedulingType?: SchedulingType;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  maxPatientCapacity?: number;
 
   @IsOptional()
   @IsInt()
