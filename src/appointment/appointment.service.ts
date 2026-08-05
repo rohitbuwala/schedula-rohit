@@ -6,7 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, EntityManager, Repository } from 'typeorm';
+import { DataSource, EntityManager, Not, Repository } from 'typeorm';
 import { DoctorProfile } from '../doctor/doctor-profile.entity';
 import { CustomAvailability } from '../doctor/entity/custom-availability.entity';
 import { RecurringAvailability } from '../doctor/entity/recurring-availability.entity';
@@ -17,6 +17,7 @@ import { Appointment } from './appointment.entity';
 import { AppointmentStatus } from './appointment-status.enum';
 import { CreateAppointmentDto } from './dto/create-appointment.dto';
 import { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
+import { RescheduleAppointmentDto } from './dto/reschedule-appointment.dto';
 
 type AvailabilityWindow =
   | Pick<RecurringAvailability, 'id' | 'startTime' | 'endTime'>
@@ -219,13 +220,7 @@ export class AppointmentService {
       throw new ConflictException('Appointment is already cancelled');
     }
 
-    if (
-      appointment.date < this.today() ||
-      (appointment.date === this.today() &&
-        this.timeToMinutes(appointment.startTime) <= this.currentTimeInMinutes())
-    ) {
-      throw new BadRequestException('Past appointments cannot be cancelled');
-    }
+    this.validateAppointmentChangeCutoff(appointment, 'cancelled');
 
     appointment.status = AppointmentStatus.CANCELLED;
     const savedAppointment =
@@ -235,6 +230,174 @@ export class AppointmentService {
       id: savedAppointment.id,
       status: savedAppointment.status,
     };
+  }
+
+  async rescheduleAppointment(
+    user: AuthenticatedUser,
+    appointmentId: string,
+    dto: RescheduleAppointmentDto,
+  ) {
+    const date = this.validateDate(dto.date);
+    this.validateDateIsNotPast(date);
+
+    const requestedStartTime = this.normalizeTime(dto.startTime);
+    const requestedEndTime = this.normalizeTime(dto.endTime);
+
+    if (
+      this.timeToMinutes(requestedStartTime) >=
+      this.timeToMinutes(requestedEndTime)
+    ) {
+      throw new BadRequestException('startTime must be before endTime');
+    }
+
+    if (
+      date === this.today() &&
+      this.timeToMinutes(requestedStartTime) <= this.currentTimeInMinutes()
+    ) {
+      throw new BadRequestException('Appointment slot cannot be in the past');
+    }
+
+    return this.dataSource.transaction(async (entityManager) => {
+      const appointment = await entityManager
+        .getRepository(Appointment)
+        .createQueryBuilder('appointment')
+        .setLock('pessimistic_write')
+        .where('appointment.id = :appointmentId', { appointmentId })
+        .getOne();
+
+      if (!appointment) {
+        throw new NotFoundException('Appointment not found');
+      }
+
+      const appointmentWithRelations = await entityManager
+        .getRepository(Appointment)
+        .findOne({
+          where: { id: appointmentId },
+          relations: {
+            doctor: { user: true },
+            patient: { user: true },
+          },
+        });
+
+      if (!appointmentWithRelations) {
+        throw new NotFoundException('Appointment not found');
+      }
+
+      appointment.doctor = appointmentWithRelations.doctor;
+      appointment.patient = appointmentWithRelations.patient;
+
+      if (
+        user.role === UserRole.PATIENT &&
+        appointment.patient.user.id !== user.id
+      ) {
+        throw new ForbiddenException('Cannot reschedule this appointment');
+      }
+
+      if (
+        user.role === UserRole.DOCTOR &&
+        appointment.doctor.user.id !== user.id
+      ) {
+        throw new ForbiddenException('Cannot reschedule this appointment');
+      }
+
+      if (appointment.status === AppointmentStatus.CANCELLED) {
+        throw new ConflictException(
+          'Cancelled appointments cannot be rescheduled',
+        );
+      }
+
+      this.validateAppointmentChangeCutoff(appointment, 'rescheduled');
+
+      if (
+        appointment.date === date &&
+        appointment.startTime === requestedStartTime &&
+        appointment.endTime === requestedEndTime
+      ) {
+        throw new ConflictException('Cannot reschedule to the same slot');
+      }
+
+      const doctor = appointment.doctor;
+      const schedulingType = appointment.schedulingType;
+      const appointmentWindow =
+        schedulingType === SchedulingType.WAVE
+          ? await this.resolveWaveWindow(
+              doctor.id,
+              date,
+              requestedStartTime,
+              requestedEndTime,
+            )
+          : await this.resolveStreamSlot(
+              doctor,
+              date,
+              requestedStartTime,
+              requestedEndTime,
+            );
+
+      await entityManager
+        .getRepository(DoctorProfile)
+        .createQueryBuilder('doctor')
+        .setLock('pessimistic_write')
+        .where('doctor.id = :doctorId', { doctorId: doctor.id })
+        .getOne();
+
+      const existingPatientAppointment = await entityManager
+        .getRepository(Appointment)
+        .findOne({
+          where: {
+            id: Not(appointment.id),
+            doctor: { id: doctor.id },
+            patient: { id: appointment.patient.id },
+            date,
+            schedulingType,
+            source: appointmentWindow.source,
+            startTime: appointmentWindow.startTime,
+            endTime: appointmentWindow.endTime,
+            status: AppointmentStatus.BOOKED,
+          },
+          relations: { doctor: true, patient: true },
+        });
+
+      if (existingPatientAppointment) {
+        throw new ConflictException('Patient has already booked this slot');
+      }
+
+      appointment.date = date;
+      appointment.schedulingType = schedulingType;
+      appointment.source = appointmentWindow.source;
+      appointment.startTime = appointmentWindow.startTime;
+      appointment.endTime = appointmentWindow.endTime;
+      appointment.tokenNumber =
+        schedulingType === SchedulingType.WAVE
+          ? await this.reserveWaveToken(
+              entityManager,
+              doctor,
+              appointmentWindow,
+              date,
+            )
+          : await this.reserveStreamSlot(
+              entityManager,
+              doctor,
+              appointmentWindow,
+              date,
+            );
+
+      const savedAppointment = await entityManager
+        .getRepository(Appointment)
+        .save(appointment);
+
+      return {
+        id: savedAppointment.id,
+        doctorId: doctor.id,
+        patientId: appointment.patient.id,
+        date: savedAppointment.date,
+        schedulingType: savedAppointment.schedulingType,
+        source: savedAppointment.source,
+        startTime: savedAppointment.startTime,
+        endTime: savedAppointment.endTime,
+        tokenNumber: savedAppointment.tokenNumber,
+        status: savedAppointment.status,
+      };
+    });
   }
 
   private async reserveWaveToken(
@@ -451,6 +614,25 @@ export class AppointmentService {
           'Availability slots overlap and cannot be used for scheduling',
         );
       }
+    }
+  }
+
+  private validateAppointmentChangeCutoff(
+    appointment: Appointment,
+    action: 'cancelled' | 'rescheduled',
+  ) {
+    if (appointment.date < this.today()) {
+      throw new BadRequestException(`Past appointments cannot be ${action}`);
+    }
+
+    if (
+      appointment.date === this.today() &&
+      this.timeToMinutes(appointment.startTime) - this.currentTimeInMinutes() <=
+        30
+    ) {
+      throw new BadRequestException(
+        `Appointments cannot be ${action} within 30 minutes of start time`,
+      );
     }
   }
 

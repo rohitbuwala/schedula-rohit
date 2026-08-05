@@ -1,12 +1,7 @@
-import { IsNotEmpty, IsString, IsUUID, Matches } from 'class-validator';
+import { IsNotEmpty, IsString, Matches } from 'class-validator';
+import { datePattern, timePattern } from './create-appointment.dto';
 
-export const datePattern = /^\d{4}-\d{2}-\d{2}$/;
-export const timePattern = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;
-
-export class CreateAppointmentDto {
-  @IsUUID()
-  doctorId: string;
-
+export class RescheduleAppointmentDto {
   @IsString()
   @IsNotEmpty()
   @Matches(datePattern, {
