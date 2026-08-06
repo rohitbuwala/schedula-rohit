@@ -17,6 +17,7 @@ import { RolesGuard } from '../common/guards/roles.guard';
 import { UserRole } from '../users/user-role.enum';
 import { AppointmentService } from './appointment.service';
 import { CreateAppointmentDto } from './dto/create-appointment.dto';
+import { RescheduleAppointmentDto } from './dto/reschedule-appointment.dto';
 
 type AuthenticatedRequest = Request & {
   user: AuthenticatedUser;
@@ -58,5 +59,19 @@ export class AppointmentController {
     @Param('id', ParseUUIDPipe) id: string,
   ) {
     return this.appointmentService.cancelAppointment(request.user, id);
+  }
+
+  @Patch('appointment/:id/reschedule')
+  @Roles(UserRole.PATIENT, UserRole.DOCTOR)
+  rescheduleAppointment(
+    @Req() request: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() rescheduleAppointmentDto: RescheduleAppointmentDto,
+  ) {
+    return this.appointmentService.rescheduleAppointment(
+      request.user,
+      id,
+      rescheduleAppointmentDto,
+    );
   }
 }

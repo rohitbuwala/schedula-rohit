@@ -5,7 +5,10 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, EntityManager, Repository } from 'typeorm';
+import { AppointmentStatus } from '../appointment/appointment-status.enum';
+import { Appointment } from '../appointment/appointment.entity';
+import { AppointmentService } from '../appointment/appointment.service';
 import { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
 import { User } from '../users/user.entity';
 import { DoctorProfile } from './doctor-profile.entity';
@@ -33,6 +36,11 @@ type AppointmentSlot = {
   availabilityId: string;
 };
 
+type RecurringAvailabilityWindow = Pick<
+  RecurringAvailability,
+  'dayOfWeek' | 'startTime' | 'endTime'
+>;
+
 @Injectable()
 export class DoctorService {
   constructor(
@@ -42,6 +50,8 @@ export class DoctorService {
     private readonly recurringAvailabilityRepository: Repository<RecurringAvailability>,
     @InjectRepository(CustomAvailability)
     private readonly customAvailabilityRepository: Repository<CustomAvailability>,
+    private readonly dataSource: DataSource,
+    private readonly appointmentService: AppointmentService,
   ) {}
 
   async createProfile(user: AuthenticatedUser, dto: CreateDoctorProfileDto) {
@@ -272,9 +282,33 @@ export class DoctorService {
       availability.id,
     );
 
-    Object.assign(availability, updatedSlot);
+    return this.dataSource.transaction(async (entityManager) => {
+      await entityManager
+        .getRepository(DoctorProfile)
+        .createQueryBuilder('doctor')
+        .setLock('pessimistic_write')
+        .where('doctor.id = :doctorId', { doctorId: doctor.id })
+        .getOne();
 
-    return this.recurringAvailabilityRepository.save(availability);
+      const affectedAppointments = await this.findAffectedAppointments(
+        entityManager,
+        doctor.id,
+        availability,
+        updatedSlot,
+      );
+
+      Object.assign(availability, updatedSlot);
+
+      await entityManager.getRepository(RecurringAvailability).save(availability);
+
+      await this.appointmentService.reassignAppointmentsForAvailabilityUpdate(
+        entityManager,
+        doctor,
+        affectedAppointments,
+      );
+
+      return availability;
+    });
   }
 
   async deleteAvailability(userId: string, availabilityId: string) {
@@ -292,6 +326,44 @@ export class DoctorService {
       where: { user: { id: userId } },
       relations: { user: true },
     });
+  }
+
+  private async findAffectedAppointments(
+    entityManager: EntityManager,
+    doctorId: string,
+    previousAvailability: RecurringAvailabilityWindow,
+    currentAvailability: RecurringAvailabilityWindow,
+  ) {
+    return entityManager
+      .getRepository(Appointment)
+      .createQueryBuilder('appointment')
+      .innerJoinAndSelect('appointment.patient', 'patient')
+      .where('appointment.doctorId = :doctorId', { doctorId })
+      .andWhere(
+        'appointment.status = :status AND appointment.source = :source ' +
+          'AND appointment.date >= :today ' +
+          'AND EXTRACT(DOW FROM appointment.date::date) = :previousDay ' +
+          'AND appointment.startTime >= :previousStartTime ' +
+          'AND appointment.endTime <= :previousEndTime ' +
+          'AND (EXTRACT(DOW FROM appointment.date::date) != :currentDay ' +
+          'OR appointment.startTime < :currentStartTime ' +
+          'OR appointment.endTime > :currentEndTime)',
+        {
+          status: AppointmentStatus.BOOKED,
+          source: 'RECURRING',
+          today: this.today(),
+          previousDay: previousAvailability.dayOfWeek,
+          previousStartTime: previousAvailability.startTime,
+          previousEndTime: previousAvailability.endTime,
+          currentDay: currentAvailability.dayOfWeek,
+          currentStartTime: currentAvailability.startTime,
+          currentEndTime: currentAvailability.endTime,
+        },
+      )
+      .setLock('pessimistic_write')
+      .orderBy('appointment.date', 'ASC')
+      .addOrderBy('appointment.startTime', 'ASC')
+      .getMany();
   }
 
   private async findAvailabilityForDoctor(
