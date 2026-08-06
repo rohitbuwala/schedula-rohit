@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
+import { AppointmentService } from '../appointment/appointment.service';
 import { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
 import { DoctorProfile } from '../doctor/doctor-profile.entity';
 import { CustomAvailability } from '../doctor/entity/custom-availability.entity';
@@ -39,6 +40,7 @@ export class PatientService {
     private readonly customAvailabilityRepository: Repository<CustomAvailability>,
     @InjectRepository(WaveBooking)
     private readonly waveBookingRepository: Repository<WaveBooking>,
+    private readonly appointmentService: AppointmentService,
     private readonly dataSource: DataSource,
   ) {}
 
@@ -186,6 +188,20 @@ export class PatientService {
       const savedBooking = await entityManager
         .getRepository(WaveBooking)
         .save(booking);
+
+      await this.appointmentService.createAppointmentFromResolvedSlot(
+        entityManager,
+        {
+          doctor,
+          patient,
+          date,
+          schedulingType: doctor.schedulingType,
+          source: waveWindow.source,
+          startTime: waveWindow.startTime,
+          endTime: waveWindow.endTime,
+          tokenNumber: savedBooking.tokenNumber,
+        },
+      );
 
       return {
         id: savedBooking.id,

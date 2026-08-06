@@ -45,6 +45,69 @@ export class AppointmentService {
     private readonly dataSource: DataSource,
   ) {}
 
+  async createAppointmentFromResolvedSlot(
+    entityManager: EntityManager,
+    input: {
+      doctor: DoctorProfile;
+      patient: PatientProfile;
+      date: string;
+      schedulingType: SchedulingType;
+      source: 'CUSTOM' | 'RECURRING';
+      startTime: string;
+      endTime: string;
+      tokenNumber?: number;
+    },
+  ) {
+    const existingPatientAppointment = await entityManager
+      .getRepository(Appointment)
+      .findOne({
+        where: {
+          doctor: { id: input.doctor.id },
+          patient: { id: input.patient.id },
+          date: input.date,
+          schedulingType: input.schedulingType,
+          source: input.source,
+          startTime: input.startTime,
+          endTime: input.endTime,
+          status: AppointmentStatus.BOOKED,
+        },
+        relations: { doctor: true, patient: true },
+      });
+
+    if (existingPatientAppointment) {
+      throw new ConflictException('Patient has already booked this slot');
+    }
+
+    const appointment = entityManager.getRepository(Appointment).create({
+      doctor: input.doctor,
+      patient: input.patient,
+      date: input.date,
+      schedulingType: input.schedulingType,
+      source: input.source,
+      startTime: input.startTime,
+      endTime: input.endTime,
+      tokenNumber: input.tokenNumber,
+      status: AppointmentStatus.BOOKED,
+    });
+
+    const savedAppointment = await entityManager
+      .getRepository(Appointment)
+      .save(appointment);
+
+    return {
+      id: savedAppointment.id,
+      doctorId: input.doctor.id,
+      patientId: input.patient.id,
+      date: savedAppointment.date,
+      schedulingType: savedAppointment.schedulingType,
+      source: savedAppointment.source,
+      startTime: savedAppointment.startTime,
+      endTime: savedAppointment.endTime,
+      tokenNumber: savedAppointment.tokenNumber,
+      status: savedAppointment.status,
+    };
+  }
+
   async createAppointment(userId: string, dto: CreateAppointmentDto) {
     const patient = await this.patientProfileRepository.findOne({
       where: { user: { id: userId } },
@@ -62,7 +125,6 @@ export class AppointmentService {
     if (!doctor) {
       throw new NotFoundException('Doctor profile not found');
     }
-
     const date = this.validateDate(dto.date);
     this.validateDateIsNotPast(date);
 
@@ -121,10 +183,20 @@ export class AppointmentService {
 
       const tokenNumber =
         doctor.schedulingType === SchedulingType.WAVE
-          ? await this.reserveWaveToken(entityManager, doctor, appointmentWindow, date)
-          : await this.reserveStreamSlot(entityManager, doctor, appointmentWindow, date);
+          ? await this.reserveWaveToken(
+              entityManager,
+              doctor,
+              appointmentWindow,
+              date,
+            )
+          : await this.reserveStreamSlot(
+              entityManager,
+              doctor,
+              appointmentWindow,
+              date,
+            );
 
-      const appointment = entityManager.getRepository(Appointment).create({
+      return this.createAppointmentFromResolvedSlot(entityManager, {
         doctor,
         patient,
         date,
@@ -133,25 +205,7 @@ export class AppointmentService {
         startTime: appointmentWindow.startTime,
         endTime: appointmentWindow.endTime,
         tokenNumber,
-        status: AppointmentStatus.BOOKED,
       });
-
-      const savedAppointment = await entityManager
-        .getRepository(Appointment)
-        .save(appointment);
-
-      return {
-        id: savedAppointment.id,
-        doctorId: doctor.id,
-        patientId: patient.id,
-        date: savedAppointment.date,
-        schedulingType: savedAppointment.schedulingType,
-        source: savedAppointment.source,
-        startTime: savedAppointment.startTime,
-        endTime: savedAppointment.endTime,
-        tokenNumber: savedAppointment.tokenNumber,
-        status: savedAppointment.status,
-      };
     });
   }
 
@@ -400,6 +454,100 @@ export class AppointmentService {
     });
   }
 
+  async reassignAppointmentsForAvailabilityUpdate(
+    entityManager: EntityManager,
+    doctor: DoctorProfile,
+    appointments: Appointment[],
+  ) {
+    appointmentsLoop: for (const appointment of appointments) {
+      const isWave = appointment.schedulingType === SchedulingType.WAVE;
+      const availabilityWindows = await this.findAvailabilityWindows(
+        doctor.id,
+        appointment.date,
+        entityManager,
+      );
+      const candidates = isWave
+        ? availabilityWindows.windows
+        : this.generateStreamAppointmentSlots(
+            appointment.date,
+            availabilityWindows.windows,
+            doctor.slotDurationMinutes,
+            doctor.bufferTimeMinutes,
+          );
+
+      for (const candidate of candidates) {
+        try {
+          const appointmentWindow = isWave
+            ? await this.resolveWaveWindow(
+                doctor.id,
+                appointment.date,
+                candidate.startTime,
+                candidate.endTime,
+                entityManager,
+              )
+            : await this.resolveStreamSlot(
+                doctor,
+                appointment.date,
+                candidate.startTime,
+                candidate.endTime,
+                entityManager,
+              );
+
+          const existingPatientAppointment = await entityManager
+            .getRepository(Appointment)
+            .findOne({
+              where: {
+                id: Not(appointment.id),
+                doctor: { id: doctor.id },
+                patient: { id: appointment.patient.id },
+                date: appointment.date,
+                schedulingType: appointment.schedulingType,
+                source: appointmentWindow.source,
+                startTime: appointmentWindow.startTime,
+                endTime: appointmentWindow.endTime,
+                status: AppointmentStatus.BOOKED,
+              },
+              relations: { doctor: true, patient: true },
+            });
+
+          if (existingPatientAppointment) {
+            continue;
+          }
+
+          appointment.source = appointmentWindow.source;
+          appointment.startTime = appointmentWindow.startTime;
+          appointment.endTime = appointmentWindow.endTime;
+          appointment.tokenNumber = isWave
+            ? await this.reserveWaveToken(
+                entityManager,
+                doctor,
+                appointmentWindow,
+                appointment.date,
+              )
+            : await this.reserveStreamSlot(
+                entityManager,
+                doctor,
+                appointmentWindow,
+                appointment.date,
+              );
+
+          await entityManager.getRepository(Appointment).save(appointment);
+          continue appointmentsLoop;
+        } catch (error) {
+          if (error instanceof ConflictException) {
+            continue;
+          }
+
+          throw error;
+        }
+      }
+
+      throw new ConflictException(
+        'Availability update affects existing appointments that could not be reassigned',
+      );
+    }
+  }
+
   private async reserveWaveToken(
     entityManager: EntityManager,
     doctor: DoctorProfile,
@@ -479,10 +627,12 @@ export class AppointmentService {
     date: string,
     startTime: string,
     endTime: string,
+    entityManager?: EntityManager,
   ): Promise<ResolvedAppointmentWindow> {
     const availabilityWindows = await this.findAvailabilityWindows(
       doctorId,
       date,
+      entityManager,
     );
     const matchedWindow = availabilityWindows.windows.find(
       (availability) =>
@@ -505,6 +655,7 @@ export class AppointmentService {
     date: string,
     startTime: string,
     endTime: string,
+    entityManager?: EntityManager,
   ): Promise<ResolvedAppointmentWindow> {
     this.validateSchedulingSettings(
       doctor.slotDurationMinutes,
@@ -514,6 +665,7 @@ export class AppointmentService {
     const availabilityWindows = await this.findAvailabilityWindows(
       doctor.id,
       date,
+      entityManager,
     );
     this.validateAvailabilityWindowsDoNotOverlap(availabilityWindows.windows);
 
@@ -535,8 +687,18 @@ export class AppointmentService {
     };
   }
 
-  private async findAvailabilityWindows(doctorId: string, date: string) {
-    const customAvailability = await this.customAvailabilityRepository.find({
+  private async findAvailabilityWindows(
+    doctorId: string,
+    date: string,
+    entityManager?: EntityManager,
+  ) {
+    const customAvailabilityRepository =
+      entityManager?.getRepository(CustomAvailability) ??
+      this.customAvailabilityRepository;
+    const recurringAvailabilityRepository =
+      entityManager?.getRepository(RecurringAvailability) ??
+      this.recurringAvailabilityRepository;
+    const customAvailability = await customAvailabilityRepository.find({
       where: { doctor: { id: doctorId }, date },
       order: { startTime: 'ASC' },
     });
@@ -550,7 +712,7 @@ export class AppointmentService {
 
     return {
       source: 'RECURRING' as const,
-      windows: await this.recurringAvailabilityRepository.find({
+      windows: await recurringAvailabilityRepository.find({
         where: {
           doctor: { id: doctorId },
           dayOfWeek: this.getDayOfWeek(date),
